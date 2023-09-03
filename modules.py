@@ -76,12 +76,12 @@ class SelfAttention(nn.Module):
         )
 
     def forward(self, x):
-        x = x.view(-1, self.channels, self.size * self.size).swapaxes(1, 2)
-        x_ln = self.ln(x)
-        attention_value, _ = self.mha(x_ln, x_ln, x_ln)
+        x = x.view(-1, self.emb_dim, self.size * self.size).swapaxes(1, 2)
+        x_norm = self.norm(x)
+        attention_value, _ = self.mha(x_norm, x_norm, x_norm)
         attention_value = attention_value + x
-        attention_value = self.ff_self(attention_value) + attention_value
-        return attention_value.swapaxes(2, 1).view(-1, self.channels, self.size, self.size)
+        attention_value = self.ff(attention_value) + attention_value
+        return attention_value.swapaxes(2, 1).view(-1, self.emb_dim, self.size, self.size)
 
 
 class UNet(nn.Module):
@@ -121,25 +121,25 @@ class UNet(nn.Module):
 
     def forward(self, x, t):
         t = t.unsqueeze(-1).type(torch.float)  # t is timestamp
-        t = self.pos_encoding(t, self.time_dim)
+        pos_emb = self.pos_encoding(t, self.time_dim)
 
         x1 = self.inc(x)
-        x2 = self.down1(x1, t)
+        x2 = self.down1(x1, pos_emb)
         x2 = self.sa1(x2)
-        x3 = self.down2(x2, t)
+        x3 = self.down2(x2, pos_emb)
         x3 = self.sa2(x3)
-        x4 = self.down3(x3, t)
+        x4 = self.down3(x3, pos_emb)
         x4 = self.sa3(x4)
 
         x4 = self.bot1(x4)
         x4 = self.bot2(x4)
         x4 = self.bot3(x4)
 
-        x = self.up1(x4, x3, t)
+        x = self.up1(x4, x3, pos_emb)
         x = self.sa4(x)
-        x = self.up2(x, x2, t)
+        x = self.up2(x, x2, pos_emb)
         x = self.sa5(x)
-        x = self.up3(x, x1, t)
+        x = self.up3(x, x1, pos_emb)
         x = self.sa6(x)
         output = self.outc(x)
         return output

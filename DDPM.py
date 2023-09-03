@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 
 import torch
@@ -41,23 +42,23 @@ class ForwardDiffusion:
         model.eval()
         with torch.no_grad():
             z = torch.randn(n, 3, self.image_size, self.image_size).to(self.device)
-            for i in tqdm(range(reversed(self.noise_steps))):
+            for i in tqdm(reversed(range(self.noise_steps)), position=0):
                 t = (torch.ones(n) * i).long().to(self.device)
-                predicted_noise = model(x, t)
+                predicted_noise = model(z, t)
                 alpha = self.alpha[t][:, None, None, None]
                 alpha_hat = self.alpha_hat[t][:, None, None, None]
                 beta = self.beta[t][:, None, None, None]
                 if i > 1:
-                    noise = torch.randn_like(x)
+                    noise = torch.randn_like(z)
                 else:
-                    noise = torch.zeros_like(x)
-                x = 1 / torch.sqrt(alpha) * (
-                            x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(
+                    noise = torch.zeros_like(z)
+                z = 1 / torch.sqrt(alpha) * (
+                            z - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(
                     beta) * noise
-            model.train()
-            x = (x.clamp(-1, 1) + 1) / 2
-            x = (x * 255).type(torch.uint8)
-            return x
+        model.train()
+        z = (z.clamp(-1, 1) + 1) / 2
+        z = (z * 255).type(torch.uint8)
+        return z
 
 def get_data(args):
     transforms = torchvision.transforms.Compose([
@@ -78,15 +79,17 @@ def train(args):
     dataloader = get_data(args)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    pbar = tqdm(dataloader)
     logger = SummaryWriter(os.path.join("runs", args.run_name))
+    l = len(dataloader)
     for epoch in range(args.epochs):
-        for i, (image, _) in enumerate(dataloader):
+        logging.info(f"Starting epoch {epoch}:")
+        pbar = tqdm(dataloader)
+        for i, (image, _) in enumerate(pbar):
             image = image.to(device)
             t = diffusion.sample_timestamps(image.shape[0])
-            x_t, noise_pred = diffusion.noise_image(image, t)
+            x_t, noise = diffusion.noise_image(image, t)
             noise_pred = model(x_t, t)
-            loss = criterion(noise_pred, noise_pred)
+            loss = criterion(noise, noise_pred)
 
             optimizer.zero_grad()
             loss.backward()
@@ -95,9 +98,14 @@ def train(args):
             pbar.set_postfix(MSE=loss.item())
             logger.add_scalar("MSE", loss.item(), global_step=epoch * l + i)
 
-        sampled_images = diffusion.sample(model, n=image.shape[0])
+        sampled_images = diffusion.sample(model, n=dataloader.batch_size)
+        if not os.path.exists(os.path.join("results", args.run_name)):
+            os.makedirs(os.path.join("results", args.run_name))
         save_images(sampled_images, os.path.join("results", args.run_name, f"{epoch}.jpg"))
+        if not os.path.exists(os.path.join("models", args.run_name)):
+            os.makedirs(os.path.join("models", args.run_name))
         torch.save(model.state_dict(), os.path.join("models", args.run_name, f"ckpt.pt"))
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
